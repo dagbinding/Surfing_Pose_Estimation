@@ -1,0 +1,37 @@
+# Local (Apple Silicon) environment for Surf_Detectron2.ipynb.
+#
+#   conda env create -f environment.yml
+#   conda activate surf-detectron2
+#
+# detectron2 has no arm64 wheels, so it is built from source afterwards:
+#
+#   git clone https://github.com/facebookresearch/detectron2.git ~/Projects/detectron2
+#   CC=clang CXX=clang++ ARCHFLAGS="-arch arm64" \
+#     pip install -e ~/Projects/detectron2 --no-build-isolation
+#   python -m ipykernel install --user \
+#     --name surf-detectron2 --display-name "Surf Detectron2"
+#
+# --no-build-isolation is required: detectron2's setup.py imports torch, which
+# an isolated build env would not expose.
+name: surf-detectron2
+channels:
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+      # numpy must stay <2 -- detectron2's C++ extensions are built against
+      # the 1.x ABI. opencv-python <5 for the same reason (5.x pulls numpy 2).
+      - numpy<2
+      - opencv-python<5
+      - pyyaml>=6
+      - torch==2.2.2
+      - torchvision==0.17.2
+      - setuptools<70   # detectron2's setup.py still needs distutils
+      - wheel
+      - ninja
+      - cython
+      - pycocotools
+      - matplotlib
+      - jupyterlab
+      - ipykernel
