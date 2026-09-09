@@ -14,8 +14,6 @@ part-way through the batch does not cost the clips already finished.
 import glob
 import json
 import os
-import shutil
-import subprocess
 import time
 
 import cv2
@@ -24,6 +22,8 @@ from detectron2 import model_zoo
 from detectron2.config import get_cfg
 from detectron2.data import MetadataCatalog
 from detectron2.engine import DefaultPredictor
+
+from stamp_video_time import needs_stamp, stamp
 
 SRC_DIR = "dataLog00188"
 OUT_DIR = os.path.join(SRC_DIR, "pose_out")
@@ -107,49 +107,6 @@ def draw(frame, inst, links, colors):
     return frame
 
 
-def stamp_creation_time(src, dst):
-    """Copy the source clip's container ``creation_time`` onto the overlay.
-
-    cv2.VideoWriter writes no container metadata, so the overlay comes out with an
-    empty tag block. That one missing field breaks downstream sync: the rippl wave
-    viewer places a clip on the ride timeline purely from ``creation_time`` (minus
-    duration) measured against the log's RTC, and it *silently skips* any clip it
-    can't time -- so an unstamped overlay simply never attaches to a wave, with no
-    error to explain why.
-
-    Remuxes through ffmpeg with ``-c copy``: no re-encode, no quality loss, about a
-    second per clip. Frame data is untouched; only the metadata block changes.
-    Returns True if the overlay now carries a creation_time.
-    """
-    ffmpeg, ffprobe = shutil.which("ffmpeg"), shutil.which("ffprobe")
-    if not (ffmpeg and ffprobe):
-        print("  !! ffmpeg/ffprobe not on PATH -- overlay left without creation_time, "
-              "so rippl will not be able to sync it to a ride", flush=True)
-        return False
-    tags = subprocess.run(
-        [ffprobe, "-v", "quiet", "-print_format", "json",
-         "-show_entries", "format_tags=creation_time", src],
-        capture_output=True, text=True).stdout
-    if '"creation_time"' not in tags:
-        print(f"  !! {os.path.basename(src)} has no creation_time to copy", flush=True)
-        return False
-    tmp = dst + ".stamping.MOV"
-    # -map_metadata 1 takes the global metadata from the *source* clip (input 1)
-    # while the streams come from the overlay (input 0).
-    proc = subprocess.run(
-        [ffmpeg, "-y", "-v", "error", "-i", dst, "-i", src,
-         "-map", "0", "-map_metadata", "1", "-c", "copy", tmp],
-        capture_output=True, text=True)
-    if proc.returncode != 0 or not os.path.exists(tmp):
-        print(f"  !! could not stamp {os.path.basename(dst)}: "
-              f"{proc.stderr.strip()[-200:]}", flush=True)
-        if os.path.exists(tmp):
-            os.remove(tmp)
-        return False
-    os.replace(tmp, dst)          # atomic: the overlay is never left half-written
-    return True
-
-
 def open_writer(path, fps, size):
     for codec in ("avc1", "mp4v"):
         w = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*codec), fps, size)
@@ -214,18 +171,6 @@ def process(src, out_mov, out_npz):
     return {"src": src, "frames_written": j, "hits": hits, "seconds": el}
 
 
-def _needs_stamp(path):
-    """True if ``path`` carries no container ``creation_time`` (so rippl can't time it)."""
-    ffprobe = shutil.which("ffprobe")
-    if not ffprobe:
-        return False
-    out = subprocess.run(
-        [ffprobe, "-v", "quiet", "-print_format", "json",
-         "-show_entries", "format_tags=creation_time", path],
-        capture_output=True, text=True).stdout
-    return '"creation_time"' not in out
-
-
 def main():
     os.makedirs(OUT_DIR, exist_ok=True)
     vids = sorted(glob.glob(os.path.join(SRC_DIR, "*.MOV")))
@@ -243,15 +188,18 @@ def main():
             # Already rendered -- but clips written before creation_time was carried
             # across still need stamping, and that costs a remux, not an inference
             # pass. Re-running the batch therefore backfills them in seconds.
-            if _needs_stamp(out_mov):
+            if needs_stamp(out_mov):
                 print("  already done; backfilling creation_time", flush=True)
-                stamp_creation_time(src, out_mov)
+                stamp(src, out_mov)
             else:
                 print("  already done, skipping", flush=True)
             continue
         r = process(src, out_mov, out_npz)
         if r:
-            stamp_creation_time(src, out_mov)
+            # cv2.VideoWriter emits no container metadata, so carry the source
+            # clip's creation_time across -- without it nothing downstream can
+            # place this overlay on a timeline. See stamp_video_time.py.
+            stamp(src, out_mov)
             summary.append(r)
             json.dump(summary, open(os.path.join(OUT_DIR, "summary.json"), "w"), indent=1)
         done = time.time() - t_all

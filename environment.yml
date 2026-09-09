@@ -15,10 +15,15 @@
 # an isolated build env would not expose.
 name: surf-detectron2
 channels:
+  - conda-forge
   - defaults
 dependencies:
   - python=3.10
   - pip
+  # ffmpeg/ffprobe: batch_pose.py stamps each rendered clip with the source's
+  # container creation_time (see stamp_video_time.py). cv2.VideoWriter writes no
+  # metadata, and without that stamp nothing downstream can time-sync the overlay.
+  - ffmpeg
   - pip:
       # numpy must stay <2 -- detectron2's C++ extensions are built against
       # the 1.x ABI. opencv-python <5 for the same reason (5.x pulls numpy 2).
