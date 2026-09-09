@@ -1,1 +1,3 @@
 *.MOV
+*.pyc
+__pycache__/
